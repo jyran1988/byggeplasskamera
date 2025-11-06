@@ -1,0 +1,15 @@
+version: "3.8"
+services:
+  fetcher:
+    build: .
+    restart: unless-stopped
+    environment:
+      - IMAGE_URL=${IMAGE_URL}
+      - INTERVAL_SECONDS=${INTERVAL_SECONDS:-300}
+      - STORAGE_DIR=/data/images
+    volumes:
+      - images:/data
+
+volumes:
+  images:
+    driver: local
