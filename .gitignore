@@ -10,3 +10,6 @@ venv/
 
 # Docker
 *.tar
+
+# directories
+data/

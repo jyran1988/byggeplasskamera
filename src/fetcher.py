@@ -20,7 +20,7 @@ import requests
 
 # Defaults
 IMAGE_URL = os.environ.get("IMAGE_URL")
-INTERVAL_SECONDS = int(os.environ.get("INTERVAL_SECONDS", "300"))  # 5 minutes
+INTERVAL_SECONDS = int(os.environ.get("INTERVAL_SECONDS", "3600"))  # 60 minutes
 STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", "/data/images"))
 MAX_FILES = int(os.environ.get("MAX_FILES", "0"))  # 0 = disabled
 MAX_AGE_DAYS = int(os.environ.get("MAX_AGE_DAYS", "0"))  # 0 = disabled
