@@ -32,33 +32,58 @@ Designed to run on a Debian laptop via Docker for long-term operation (2+ years)
 
 1. Navigate to the repository:- `config.example.env` - example env file
 
-```bash- `.github/workflows/ci.yml` - CI template
+`.github/workflows/ci.yml` - CI template
 
 cd /path/to/byggeplasskamera
 
-```## Quick usage (if setup is okay)
-
-
+## Quick usage (if setup is okay)
 
 2. Create the data directory:1. Log into the server (SSH or local).
 
-```bash  - ```ssh julius@192.168.86.158``` enter password
+```bash
+ssh julius@192.168.86.158
+``` 
+- enter password
 
-mkdir -p data2. verify running docker containers:
+2. verify running docker containers:
 
-```  - ```docker ps```
+  - ```docker ps```
 
 3. Navigate to image fetcher directory:
 
-3. Start all services:  - ```cd /var/lib/docker/volumes/byggeplasskamera_images/_data/images```
+```bash
+cd /var/lib/docker/volumes/byggeplasskamera_images/_data/images
+```
 
-```bash  - ```dir``` to se all files
+  - ```dir``` to se all files
 
-docker compose up -d --build4. (Optional) Repo for application:
+4. (Optional) Repo for application:
+```bash
+cd /opt/git/byggeplasskamera
+```
 
-```  - ```cd /opt/git/byggeplasskamera```
+```bash
+docker compose up -d
+```
 
-  - ```docker compose up``` (to run container, envs in compose file)
+- (to run container, envs in compose file)
+
+5. Generate timelapse video 
+ - via enpoint sync
+ ```bash
+ curl -X POST 'http://localhost/timelapse' -d 'fps=30' -d 'no_overlay=1'
+# returns when done: {"status":"finished","output_path":"/data/images/timelapse_20251111_213501.mp4"}
+ ```
+ - via endpoint async
+  ```bash
+  curl -X POST 'http://host/timelapse?async=true&fps=30'
+# -> {"job_id":"...","status":"queued","output_path":"/data/images/timelapse_...mp4"}
+curl http://host/timelapse/<job_id>  # check status
+```
+ - (inside container):
+```bash
+docker exec -it byggeplasskamera-web-1 python src/timelapse.py /data/images -o /data/timelapse.mp4 --fps 30
+```
 
 This will start:
 
@@ -70,19 +95,19 @@ This will start:
 
 Check status:
 
-```bash```
-
+``` bash
 docker compose psdocker build -t image-fetcher:latest .
 
-docker compose logs -f fetcher```
+docker compose logs -f fetcher
 
 docker compose logs -f web
+```
 
-```2. Run with a local volume for images:
+2. Run with a local volume for images:
 
 
 
-## Web Server Endpoints```
+## Web Server Endpoints
 
 docker run -d --name image-fetcher \
 

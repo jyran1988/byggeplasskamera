@@ -129,6 +129,9 @@ def _generate_with_overlay(images: list, output_path: Path, fps: int) -> bool:
         for idx, img_path in enumerate(images):
             try:
                 img = Image.open(img_path)
+                # Ensure image is RGB for JPEG
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
                 draw = ImageDraw.Draw(img)
                 
                 # Try to load a font; fallback to default if not available
@@ -156,7 +159,8 @@ def _generate_with_overlay(images: list, output_path: Path, fps: int) -> bool:
                 draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
                 
                 # Save to temp directory
-                labeled_path = tmpdir / f"{idx:06d}_{img_path.stem}.jpg"
+                # Save with a pure sequential numeric filename so ffmpeg can use %06d
+                labeled_path = tmpdir / f"{idx:06d}.jpg"
                 img.save(labeled_path, "JPEG")
                 
                 if (idx + 1) % 100 == 0:
@@ -167,13 +171,12 @@ def _generate_with_overlay(images: list, output_path: Path, fps: int) -> bool:
                 return False
         
         logger.info("All %d images labeled. Creating video...", len(images))
-        
-        # Now use ffmpeg to create video from labeled images
-        pattern = str(tmpdir / "%06d_*.jpg")
+
+        # Use numeric sequence input (%06d.jpg)
+        pattern = str(tmpdir / "%06d.jpg")
         cmd = [
             "ffmpeg",
             "-framerate", str(fps),
-            "-pattern_type", "glob",
             "-i", pattern,
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
