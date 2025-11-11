@@ -2,9 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# system deps for requests if needed (kept minimal)
+# Install system dependencies: ffmpeg for video generation, fonts for text overlay
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    ffmpeg \
+    fonts-dejavu \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
@@ -19,6 +21,8 @@ ENV MAX_FILES=0
 ENV MAX_AGE_DAYS=0
 ENV TIMEOUT_SECONDS=15
 ENV RETRY_COUNT=3
+
+EXPOSE 5000
 
 VOLUME ["/data"]
 
