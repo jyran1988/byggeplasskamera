@@ -8,6 +8,8 @@ import threading
 import subprocess
 import uuid
 from datetime import datetime
+import zipfile
+import io
 
 app = Flask(__name__)
 
@@ -20,14 +22,25 @@ logger = logging.getLogger("web_server")
 
 @app.route("/")
 def index():
-        """Render a simple HTML UI: latest image, thumbnails, and latest timelapse video."""
+        """Render a simple HTML UI: latest image, thumbnails grouped by month, and latest timelapse video."""
         try:
-                images = sorted([
+                all_images = sorted([
                         p.name for p in STORAGE_DIR.iterdir()
                         if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp") and p.name != "latest"
                 ], reverse=True)
         except Exception:
-                images = []
+                all_images = []
+
+        # Group by month (YYYYMM), keep only latest per month
+        monthly_images = {}
+        for img in all_images:
+            # Filename format: YYYYMMDD_HHMMSS.jpg
+            month_key = img[:6]  # YYYYMM
+            if month_key not in monthly_images:
+                monthly_images[month_key] = img
+
+        # Sort months descending (newest first)
+        sorted_months = sorted(monthly_images.keys(), reverse=True)
 
         latest_url = url_for("latest")
 
@@ -51,8 +64,13 @@ def index():
             <style>
                 body { font-family: Arial, sans-serif; margin: 16px; }
                 .row { display:flex; gap:16px; align-items:flex-start; }
-                .thumbs { display:flex; flex-wrap:wrap; gap:8px; max-width:100%; }
-                .thumbs img { width:160px; height:auto; border:1px solid #ccc; }
+                .monthly-group { margin-bottom:24px; }
+                .monthly-group h3 { margin:8px 0; }
+                .month-thumb { display:flex; align-items:center; gap:12px; }
+                .month-thumb img { width:160px; height:auto; border:1px solid #ccc; }
+                .month-thumb-info { display:flex; flex-direction:column; gap:8px; }
+                .month-thumb-info a { padding:6px 12px; background:#007bff; color:#fff; text-decoration:none; border-radius:4px; font-size:0.9em; }
+                .month-thumb-info a:hover { background:#0056b3; }
                 .latest img { max-width:720px; height:auto; border:2px solid #333; }
                 .video { margin-top:12px; }
                 .meta { color:#666; font-size:0.9em }
@@ -66,14 +84,22 @@ def index():
                     <a href="{{ latest_url }}"><img id="latest-img" src="{{ latest_url }}" alt="latest"></a>
                     <div class="meta">Auto-refreshes every 30s</div>
                 </div>
-                <div style="flex:1">
-                    <h2>Recent images</h2>
-                    <div class="thumbs">
-                        {% for img in images %}
+            </div>
+
+            <div class="monthly-group">
+                <h2>Images by month</h2>
+                {% for month in sorted_months %}
+                    {% set img = monthly_images[month] %}
+                    <div class="monthly-group">
+                        <h3>{{ month[:4] }}-{{ month[4:6] }}</h3>
+                        <div class="month-thumb">
                             <a href="/download/{{ img }}"><img src="/download/{{ img }}" alt="{{ img }}" title="{{ img }}"></a>
-                        {% endfor %}
+                            <div class="month-thumb-info">
+                                <a href="/download/zip/{{ month }}">📦 Download all (zip)</a>
+                            </div>
+                        </div>
                     </div>
-                </div>
+                {% endfor %}
             </div>
 
             <div class="video">
@@ -102,7 +128,7 @@ def index():
         </html>
         """
 
-        return render_template_string(html, images=images, latest_url=latest_url, latest_timelapse=latest_timelapse)
+        return render_template_string(html, sorted_months=sorted_months, monthly_images=monthly_images, latest_url=latest_url, latest_timelapse=latest_timelapse)
 
 
 @app.route("/latest")
@@ -246,6 +272,42 @@ def timelapse_status(job_id):
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
+
+
+@app.route("/download/zip/<month>")
+def download_zip(month):
+    """Download all images from a specific month as a zip file.
+
+    month format: YYYYMM (e.g., 202501)
+    """
+    if not month or len(month) != 6 or not month.isdigit():
+        return jsonify({"error": "Invalid month format. Use YYYYMM"}), 400
+
+    try:
+        # Collect all files that start with this month
+        files = [
+            p for p in STORAGE_DIR.iterdir()
+            if p.is_file() and p.name.startswith(month) and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+        ]
+        if not files:
+            return jsonify({"error": "No images found for this month"}), 404
+
+        # Create zip in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in sorted(files):
+                zf.write(file_path, arcname=file_path.name)
+
+        zip_buffer.seek(0)
+        return send_file(
+            zip_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"images_{month}.zip"
+        )
+    except Exception as e:
+        logger.exception("Failed to create zip for month %s", month)
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

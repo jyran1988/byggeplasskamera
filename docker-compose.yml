@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       - IMAGE_URL=https://kunde.byggekamera.no/?u=nytt-sykehus-aker&c=1059
-      - INTERVAL_SECONDS=${INTERVAL_SECONDS:-300}
+      - INTERVAL_SECONDS=${INTERVAL_SECONDS:-3600}
       - STORAGE_DIR=/data/images
     volumes:
       - ./data:/data
