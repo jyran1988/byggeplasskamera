@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src /app/src
 
-ENV IMAGE_URL="https://kunde.byggekamera.no/?u=nytt-sykehus-aker&c=1059"
+ENV IMAGE_URL="https://hurumbrygge.info/cam1visning/kamera1.jpg"
 ENV INTERVAL_SECONDS=300
 ENV STORAGE_DIR=/data/images
 ENV MAX_FILES=0

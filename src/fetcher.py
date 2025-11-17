@@ -21,7 +21,10 @@ import requests
 # Defaults
 IMAGE_URL = os.environ.get("IMAGE_URL")
 INTERVAL_SECONDS = int(os.environ.get("INTERVAL_SECONDS", "3600"))  # 60 minutes
+# Single-source storage dir (backwards compatible)
 STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", "/data/images"))
+# Root where multiple sources live; each source will be stored under STORAGE_ROOT/<id>/images
+STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", str(STORAGE_DIR.parent)))
 MAX_FILES = int(os.environ.get("MAX_FILES", "0"))  # 0 = disabled
 MAX_AGE_DAYS = int(os.environ.get("MAX_AGE_DAYS", "0"))  # 0 = disabled
 TIMEOUT_SECONDS = int(os.environ.get("TIMEOUT_SECONDS", "15"))
@@ -37,6 +40,59 @@ logger = logging.getLogger("fetcher")
 
 def ensure_storage_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def slugify_id(s: str) -> str:
+    # simple slug: allow alnum, dash, underscore; convert others to '_'
+    out = []
+    for ch in s:
+        if ch.isalnum() or ch in ("-", "_"):
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out)
+
+
+def parse_sources() -> list:
+    """Parse SOURCES env var or fall back to IMAGE_URL.
+
+    SOURCES format examples:
+      "cam1=https://host/cam1.jpg,cam2=https://host/cam2.jpg"
+      or semicolon separated.
+
+    Returns list of dicts: {id, url, dir}
+    """
+    raw = os.environ.get("SOURCES")
+    sources = []
+    if raw:
+        parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+        for p in parts:
+            if "=" in p:
+                sid, url = p.split("=", 1)
+                sid = slugify_id(sid.strip()) or None
+                url = url.strip()
+            else:
+                # If only URL provided, generate id from hostname
+                url = p
+                try:
+                    sid = slugify_id(url.split("//")[-1].split("/")[0])
+                except Exception:
+                    sid = None
+            if not sid:
+                sid = f"camera_{len(sources)+1}"
+            sources.append({"id": sid, "url": url})
+    elif IMAGE_URL:
+        sid = os.environ.get("SOURCE_ID") or STORAGE_DIR.name or "camera"
+        sid = slugify_id(sid)
+        sources.append({"id": sid, "url": IMAGE_URL})
+    else:
+        return []
+
+    # Attach directory for each source
+    for s in sources:
+        sdir = STORAGE_ROOT / s["id"] / "images"
+        s["dir"] = sdir
+    return sources
 
 
 def guess_extension(resp: requests.Response, url: str) -> str:
@@ -111,42 +167,52 @@ def try_fetch(url: str, timeout: int, retries: int, backoff: float) -> Optional[
 
 
 def main() -> int:
-    if not IMAGE_URL:
-        logger.error("IMAGE_URL is not set. Exiting.")
+    sources = parse_sources()
+    if not sources:
+        logger.error("No sources configured (set SOURCES or IMAGE_URL). Exiting.")
         return 2
 
-    ensure_storage_dir(STORAGE_DIR)
-    logger.info("Starting image fetcher. URL=%s interval=%ds storage=%s", IMAGE_URL, INTERVAL_SECONDS, STORAGE_DIR)
+    # ensure storage dirs exist
+    for s in sources:
+        ensure_storage_dir(s["dir"])
+
+    logger.info("Starting image fetcher. sources=%s interval=%ds storage_root=%s", \
+                ",".join([f"{s['id']}={s['url']}" for s in sources]), INTERVAL_SECONDS, STORAGE_ROOT)
 
     while True:
         start = time.time()
-        resp = try_fetch(IMAGE_URL, timeout=TIMEOUT_SECONDS, retries=RETRY_COUNT, backoff=RETRY_BACKOFF_FACTOR)
-        if resp is not None:
-            ext = guess_extension(resp, IMAGE_URL)
-            ts = datetime.utcnow()
-            fname = filename_for_ts(ts, ext)
-            dest = STORAGE_DIR / fname
+        # iterate through sources and fetch each once per cycle
+        for s in sources:
+            sid = s["id"]
+            url = s["url"]
+            sdir = s["dir"]
             try:
-                save_image(resp.content, dest)
-                logger.info("Saved image: %s", dest.name)
-                # update latest symlink
-                latest = STORAGE_DIR / "latest"
-                try:
-                    if latest.exists() or latest.is_symlink():
-                        latest.unlink()
-                    latest.symlink_to(dest.name)
-                except Exception:
-                    # If symlink not supported on FS, copy
+                resp = try_fetch(url, timeout=TIMEOUT_SECONDS, retries=RETRY_COUNT, backoff=RETRY_BACKOFF_FACTOR)
+                if resp is not None:
+                    ext = guess_extension(resp, url)
+                    ts = datetime.utcnow()
+                    fname = filename_for_ts(ts, ext)
+                    dest = sdir / fname
+                    save_image(resp.content, dest)
+                    logger.info("[%s] Saved image: %s", sid, dest.name)
+                    # update latest symlink
+                    latest = sdir / "latest"
                     try:
-                        shutil.copy2(dest, STORAGE_DIR / "latest")
+                        if latest.exists() or latest.is_symlink():
+                            latest.unlink()
+                        latest.symlink_to(dest.name)
                     except Exception:
-                        logger.exception("Failed to update latest link/file")
-                # retention
-                rotate_storage(STORAGE_DIR, max_files=MAX_FILES, max_age_days=MAX_AGE_DAYS)
+                        # If symlink not supported on FS, copy
+                        try:
+                            shutil.copy2(dest, sdir / "latest")
+                        except Exception:
+                            logger.exception("[%s] Failed to update latest link/file", sid)
+                    # retention
+                    rotate_storage(sdir, max_files=MAX_FILES, max_age_days=MAX_AGE_DAYS)
+                else:
+                    logger.warning("[%s] Failed to fetch image after retries", sid)
             except Exception:
-                logger.exception("Failed to save image to %s", dest)
-        else:
-            logger.warning("Failed to fetch image after retries")
+                logger.exception("[%s] Failed processing source %s", sid, url)
 
         elapsed = time.time() - start
         sleep_for = INTERVAL_SECONDS - elapsed

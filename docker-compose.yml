@@ -4,8 +4,12 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      - IMAGE_URL=https://kunde.byggekamera.no/?u=nytt-sykehus-aker&c=1059
+      # Example: two sources (id=url). Separate with comma or semicolon.
+      - SOURCES=cam1=https://hurumbrygge.info/cam1visning/kamera1.jpg,cam2=https://hurumbrygge.info/cam2visning/kamera2.jpg
       - INTERVAL_SECONDS=${INTERVAL_SECONDS:-3600}
+      # Root of storage for multiple sources; fetcher will write to $STORAGE_ROOT/<id>/images
+      - STORAGE_ROOT=/data
+      # Backwards-compat: per-container single-source storage dir
       - STORAGE_DIR=/data/images
     volumes:
       - ./data:/data
