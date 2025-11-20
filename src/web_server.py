@@ -143,6 +143,7 @@ def index():
             <title>Libakkløkka - Multi Camera</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 16px; }
+                .header-controls { margin-bottom: 12px; display:flex; gap:12px; align-items:center; }
                 /* Layout: flexible columns that wrap on small screens */
                 .sources { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
                 /* Each source column grows to fill available space but has a sensible min-width */
@@ -159,6 +160,10 @@ def index():
         </head>
         <body>
             <h1>Libakkløkka</h1>
+                <div class="header-controls">
+                    <button id="tl-all-btn">Create timelapse for all</button>
+                    <span id="tl-all-status" class="meta"></span>
+                </div>
             <div class="sources">
             {% for s in sources_data %}
                 <div class="source">
@@ -185,14 +190,16 @@ def index():
 
                     <div>
                         <h3>Latest timelapse</h3>
+                        <div class="timelapse-controls">
+                            <button class="tl-btn" data-source="{{ s.id }}">Create timelapse</button>
+                            <span class="tl-status" id="tl-status-{{ s.id }}">{% if s.latest_timelapse %}Latest: <a href="/source/{{ s.id }}/download/{{ s.latest_timelapse }}">{{ s.latest_timelapse }}</a>{% else %}No timelapse videos yet.{% endif %}</span>
+                        </div>
                         {% if s.latest_timelapse %}
                             <video controls width="420">
                                 <source src="/source/{{ s.id }}/download/{{ s.latest_timelapse }}" type="video/mp4">
                                 Your browser does not support the video tag.
                             </video>
                             <div class="meta">{{ s.latest_timelapse }}</div>
-                        {% else %}
-                            <div class="meta">No timelapse videos found yet.</div>
                         {% endif %}
                     </div>
                 </div>
@@ -208,6 +215,126 @@ def index():
                         img.src = src + '?t=' + Date.now();
                     });
                 }, 30000);
+
+                // Timelapse creation: POST async jobs and poll status
+                async function triggerTimelapseFor(source) {
+                    const statusEl = document.getElementById('tl-status-' + source);
+                    statusEl.textContent = 'Queued...';
+                    try {
+                        const resp = await fetch('/timelapse', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                            body: new URLSearchParams({source: source, async: 'true'})
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) {
+                            statusEl.textContent = 'Error: ' + (data.error || resp.statusText);
+                            return;
+                        }
+                        const jobId = data.job_id || (data.jobs && data.jobs[0] && data.jobs[0].job_id);
+                        if (!jobId) {
+                            // if multiple jobs returned, show list
+                            if (data.jobs) {
+                                statusEl.textContent = 'Queued ' + data.jobs.length + ' jobs';
+                                return;
+                            }
+                            statusEl.textContent = 'No job id returned';
+                            return;
+                        }
+
+                        statusEl.textContent = 'Job queued: ' + jobId + ' (waiting)';
+
+                        // poll status
+                        const poll = setInterval(async () => {
+                            try {
+                                const r2 = await fetch('/timelapse/' + jobId);
+                                const j = await r2.json();
+                                if (j.status === 'finished') {
+                                    clearInterval(poll);
+                                    const out = j.output_path || j.output;
+                                    if (out) {
+                                        // build a download URL relative to this source
+                                        const url = '/source/' + source + '/download/' + out.split('/').pop();
+                                        statusEl.innerHTML = 'Done: <a href="' + url + '">Download</a>';
+                                    } else {
+                                        statusEl.textContent = 'Finished — check server';
+                                    }
+                                } else if (j.status === 'failed' || j.status === 'error') {
+                                    clearInterval(poll);
+                                    statusEl.textContent = 'Failed: ' + (j.stderr || j.error || j.exit_code || 'error');
+                                }
+                            } catch (err) {
+                                clearInterval(poll);
+                                statusEl.textContent = 'Polling error';
+                            }
+                        }, 2000);
+
+                    } catch (err) {
+                        statusEl.textContent = 'Request failed';
+                    }
+                }
+
+                document.addEventListener('click', function(ev){
+                    if (ev.target && ev.target.classList && ev.target.classList.contains('tl-btn')) {
+                        const src = ev.target.getAttribute('data-source');
+                        triggerTimelapseFor(src);
+                    }
+                });
+
+                document.getElementById('tl-all-btn').addEventListener('click', async function(){
+                    const statusEl = document.getElementById('tl-all-status');
+                    statusEl.textContent = 'Queuing...';
+                    try {
+                        const resp = await fetch('/timelapse', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                            body: new URLSearchParams({source: 'all', async: 'true'})
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) {
+                            statusEl.textContent = 'Error: ' + (data.error || resp.statusText);
+                            return;
+                        }
+                        if (!data.jobs || !data.jobs.length) {
+                            statusEl.textContent = 'No jobs created';
+                            return;
+                        }
+
+                        // show queued jobs
+                        statusEl.innerHTML = 'Queued: ' + data.jobs.map(j => j.source).join(', ');
+
+                        // For each job, poll until finished and then append a link
+                        data.jobs.forEach(j => {
+                            const jid = j.job_id;
+                            const src = j.source;
+                            const p = document.createElement('div');
+                            p.textContent = src + ': waiting...';
+                            statusEl.appendChild(p);
+
+                            const poll = setInterval(async () => {
+                                try {
+                                    const r = await fetch('/timelapse/' + jid);
+                                    const obj = await r.json();
+                                    if (obj.status === 'finished') {
+                                        clearInterval(poll);
+                                        const out = obj.output_path || obj.output || j.output_path;
+                                        const fname = out.split('/').pop();
+                                        p.innerHTML = src + ': <a href="/source/' + src + '/download/' + fname + '">Download</a>';
+                                    } else if (obj.status === 'failed' || obj.status === 'error') {
+                                        clearInterval(poll);
+                                        p.textContent = src + ': failed';
+                                    }
+                                } catch (er) {
+                                    clearInterval(poll);
+                                    p.textContent = src + ': polling error';
+                                }
+                            }, 2000);
+                        });
+
+                    } catch (err) {
+                        statusEl.textContent = 'Request failed';
+                    }
+                });
             </script>
         </body>
         </html>
@@ -377,6 +504,15 @@ def timelapse_trigger():
     run_async = str(data.get("async", "false")).lower() in ("1", "true", "yes")
 
     source = data.get("source")
+    # If no source specified and multiple sources exist under STORAGE_ROOT,
+    # require the caller to specify which source to generate timelapse for.
+    if not source:
+        discovered = [sid for sid, _ in _discover_sources()]
+        if len(discovered) > 1:
+            return jsonify({"error": "Multiple sources detected; please specify 'source' parameter", "sources": discovered}), 400
+        if len(discovered) == 1:
+            source = discovered[0]
+
     source_dir = _get_source_dir(source) or STORAGE_DIR
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -391,6 +527,29 @@ def timelapse_trigger():
         return jsonify({"error": "Storage directory not available"}), 500
 
     if run_async:
+        # Special case: `source=all` -> create an async job for every discovered source
+        if source == 'all':
+            discovered = _discover_sources()
+            if not discovered:
+                return jsonify({"error": "No sources discovered"}), 400
+            job_infos = []
+            for sid, _ in discovered:
+                sid_dir = _get_source_dir(sid) or STORAGE_DIR
+                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                ofname = f"timelapse_{ts}.mp4"
+                opath = str((sid_dir / ofname).resolve())
+                job_id = str(uuid.uuid4())
+                jobs[job_id] = {
+                    "status": "queued",
+                    "created_at": datetime.utcnow().isoformat() + "Z",
+                    "output_path": opath,
+                    "source": sid,
+                }
+                thread = threading.Thread(target=_run_timelapse_subprocess, args=(str(sid_dir), opath, fps, start, end, no_overlay, job_id), daemon=True)
+                thread.start()
+                job_infos.append({"job_id": job_id, "source": sid, "output_path": opath})
+            return jsonify({"jobs": job_infos}), 202
+
         job_id = str(uuid.uuid4())
         jobs[job_id] = {
             "status": "queued",
